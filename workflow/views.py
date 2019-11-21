@@ -11,7 +11,6 @@ from .models import Program, Country, Province, AdminLevelThree, District, Proje
     Documentation, Monitor, Benchmarks, Budget, ApprovalAuthority, Checklist, ChecklistItem, Contact, Stakeholder, FormGuidance, \
     TolaUser
 from formlibrary.models import TrainingAttendance, Distribution
-from indicators.models import Result, ExternalService, Indicator
 from django.utils import timezone
 from django.utils.datastructures import MultiValueDictKeyError
 from django.urls import reverse
@@ -165,11 +164,16 @@ class ProgramDash(LoginRequiredMixin, ListView):
 
         getPrograms = self.request.user.tola_user.available_programs.filter(Q(agreement__isnull=False) | Q(complete__isnull=False), funding_status="Funded").distinct()
         filtered_program = None
-        if int(self.kwargs['pk']) == 0:
+        try:
+            program_pk = int(self.kwargs['pk'])
+        except KeyError:
+            program_pk = 0
+
+        if program_pk == 0:
             getDashboard = getPrograms.prefetch_related('agreement','agreement__projectcomplete','agreement__office').filter(funding_status="Funded").order_by('name').annotate(has_agreement=Count('agreement'),has_complete=Count('complete'))
         else:
             getDashboard = getPrograms.prefetch_related('agreement','agreement__projectcomplete','agreement__office').filter(id=self.kwargs['pk'], funding_status="Funded").order_by('name')
-            filtered_program = getPrograms.only('name').get(pk=self.kwargs['pk']).name
+            filtered_program = getPrograms.only('name').get(pk=program_pk).name
 
         if self.kwargs.get('status', None):
 
@@ -185,7 +189,7 @@ class ProgramDash(LoginRequiredMixin, ListView):
         else:
             status = None
 
-        return render(request, self.template_name, {'getDashboard': getDashboard, 'getPrograms': getPrograms, 'APPROVALS': APPROVALS, 'program_id':  self.kwargs['pk'], 'status': status, 'filtered_program': filtered_program})
+        return render(request, self.template_name, {'getDashboard': getDashboard, 'getPrograms': getPrograms, 'APPROVALS': APPROVALS, 'program_id':  program_pk, 'status': status, 'filtered_program': filtered_program})
 
 
 @method_decorator(has_projects_access, name='dispatch')
@@ -226,10 +230,11 @@ class ProjectAgreementImport(LoginRequiredMixin, ListView):
     def get(self, request, *args, **kwargs):
         countries = getCountry(request.user)
         getPrograms = Program.objects.all().filter(funding_status="Funded", country__in=countries)
-        getServices = ExternalService.objects.all()
         getCountries = Country.objects.all().filter(country__in=countries)
 
-        return render(request, self.template_name, {'getPrograms': getPrograms, 'getServices': getServices , 'getCountries': getCountries})
+        return render(request, self.template_name, {
+            'getPrograms': getPrograms, 'getCountries': getCountries
+        })
 
 
 @method_decorator(has_projects_access, name='dispatch')
@@ -324,6 +329,9 @@ class ProjectAgreementUpdate(LoginRequiredMixin, UpdateView):
 
     @method_decorator(group_excluded('ViewOnly', url='workflow/permission'))
     def dispatch(self, request, *args, **kwargs):
+        agreement_form = ProjectAgreement.objects.get(pk=kwargs['pk'])
+        if agreement_form.approval == "approved":
+            return HttpResponseRedirect(reverse('index'))
         try:
             self.guidance = FormGuidance.objects.get(form="Agreement")
         except FormGuidance.DoesNotExist:
@@ -350,11 +358,7 @@ class ProjectAgreementUpdate(LoginRequiredMixin, UpdateView):
         context.update({'p_agreement': getAgreement.project_name})
         context.update({'p_agreement_program': getAgreement.program})
 
-
-        try:
-            getQuantitative = Result.objects.all().filter(agreement__id=self.kwargs['pk']).order_by('indicator')
-        except Result.DoesNotExist:
-            getQuantitative = None
+        getQuantitative = None
         context.update({'getQuantitative': getQuantitative})
 
         try:
@@ -490,11 +494,7 @@ class ProjectAgreementDetail(LoginRequiredMixin, DetailView):
             getDocuments = None
         context.update({'getDocuments': getDocuments})
 
-        try:
-            getQuantitativeOutputs = Result.objects.all().filter(agreement__id=self.kwargs['pk'])
-
-        except Result.DoesNotExist:
-            getQuantitativeOutputs = None
+        getQuantitativeOutputs = None
         context.update({'getQuantitativeOutputs': getQuantitativeOutputs})
 
         return context
@@ -633,9 +633,6 @@ class ProjectCompleteCreate(LoginRequiredMixin, CreateView):
         getComplete = ProjectComplete.objects.get(id=latest.id)
         getAgreement = ProjectAgreement.objects.get(id=self.request.POST['project_agreement'])
 
-        #update the quantitative data fields to include the newly created complete
-        Result.objects.filter(agreement__id=getComplete.project_agreement_id).update(complete=getComplete)
-
         #update the other budget items
         Budget.objects.filter(agreement__id=getComplete.project_agreement_id).update(complete=getComplete)
 
@@ -698,10 +695,7 @@ class ProjectCompleteUpdate(LoginRequiredMixin, UpdateView):
         context.update({'getBudget': getBudget})
 
         # get Quantitative data
-        try:
-            getQuantitative = Result.objects.all().filter(Q(agreement__id=getComplete.project_agreement_id) | Q(complete__id=getComplete.pk)).order_by('indicator')
-        except Result.DoesNotExist:
-            getQuantitative = None
+        getQuantitative = None
         context.update({'getQuantitative': getQuantitative})
 
         # get benchmark or project components
@@ -847,7 +841,8 @@ def documentation_list(request):
     # distinct() needed as a program in multiple countries causes duplicate documents returned
     documents = Documentation.objects.all().select_related('project').filter(program__in=programs).distinct()
 
-    readonly = not user_has_program_roles(request.user, programs, ['medium', 'high'])
+    # Make document creation available to anyone until we're told it needs to be restricted.
+    readonly = False # not user_has_program_roles(request.user, programs, ['medium', 'high'])
 
     js_context = {
         'allowProjectsAccess': request.user.tola_user.allow_projects_access,
@@ -1021,8 +1016,8 @@ class DocumentationCreate(CreateView):
     @method_decorator(login_required)
     @method_decorator(group_excluded('ViewOnly', url='workflow/permission'))
     def dispatch(self, request, *args, **kwargs):
-        if not user_has_program_roles(request.user, request.user.tola_user.available_programs, ['medium', 'high']):
-            raise PermissionDenied
+        # if not user_has_program_roles(request.user, request.user.tola_user.available_programs, ['medium', 'high']):
+        #     raise PermissionDenied
 
         try:
             self.guidance = FormGuidance.objects.get(form="Documentation")
@@ -1130,18 +1125,18 @@ class DocumentationDelete(DeleteView):
 
     form_class = DocumentationForm
 
-class IndicatorDataBySite(LoginRequiredMixin, ListView):
-    template_name = 'workflow/site_indicatordata.html'
-    context_object_name = 'results'
-
-    def get_context_data(self, **kwargs):
-        context = super(IndicatorDataBySite, self).get_context_data(**kwargs)
-        context['site'] = SiteProfile.objects.get(pk=self.kwargs.get('site_id'))
-        return context
-
-    def get_queryset(self):
-        q = Result.objects.filter(site__id=self.kwargs.get('site_id'), program__in=self.request.user.tola_user.available_programs).order_by('program', 'indicator')
-        return q
+# class IndicatorDataBySite(LoginRequiredMixin, ListView):
+#     template_name = 'workflow/site_indicatordata.html'
+#     context_object_name = 'results'
+#
+#     def get_context_data(self, **kwargs):
+#         context = super(IndicatorDataBySite, self).get_context_data(**kwargs)
+#         context['site'] = SiteProfile.objects.get(pk=self.kwargs.get('site_id'))
+#         return context
+#
+#     def get_queryset(self):
+#         q = Result.objects.filter(site__id=self.kwargs.get('site_id'), program__in=self.request.user.tola_user.available_programs).order_by('program', 'indicator')
+#         return q
 
 
 class ProjectCompleteBySite(LoginRequiredMixin, ListView):
@@ -1192,9 +1187,7 @@ class SiteProfileList(ListView):
         elif program_id != 0:
             getSiteProfile = SiteProfile.objects.prefetch_related(\
                     'country','district','province')\
-                .filter(Q(projectagreement__program__id=program_id)\
-                        | Q(result__program__id=program_id))\
-                .distinct()
+                .filter(Q(projectagreement__program__id=program_id)).distinct()
         else:
             getSiteProfile = SiteProfile.objects.prefetch_related(\
                     'country','district','province')\
@@ -2439,11 +2432,6 @@ def reportingperiod_update(request, pk):
             failfields.append('reporting_period_end')
         elif reporting_period_end.date() == program.reporting_period_end:
             pass
-        elif (program.last_time_aware_indicator_start_date and
-              reporting_period_end.date() < program.last_time_aware_indicator_start_date):
-            success = False
-            failmsg.append(_('Reporting period must end after the start of the last target period'))
-            failfields.append('reporting_period_end')
         else:
             program.reporting_period_end = reporting_period_end
         if reporting_period_start and reporting_period_start >= reporting_period_end:

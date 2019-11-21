@@ -1,13 +1,12 @@
 import math
 import simplejson
-from datetime import datetime
+from datetime import datetime, date
 from django.core.serializers import serialize
 from django import template
 from django.db.models import QuerySet
 from django.utils.timezone import localdate
 from django.utils.translation import ugettext_lazy as _
 from django.utils.safestring import mark_safe
-from indicators.models import Indicator
 from django.conf import settings
 
 register = template.Library()
@@ -72,53 +71,6 @@ def and_or(value1, value2):
         result = _("or")
     return result
 
-
-@register.filter('symbolize_change')
-def symbolize_change(value):
-    """
-    Returns corresponding math symbol for Direction of change
-    Usage:
-    {{ indicator.direction_of_change|symbolize_change}}
-    """
-    if value == Indicator.DIRECTION_OF_CHANGE_NEGATIVE:
-        return _("-")
-
-    if value == Indicator.DIRECTION_OF_CHANGE_POSITIVE:
-        return _("+")
-
-    return _("N/A")
-
-
-@register.filter('target_frequency_label')
-def target_frequency_label(value):
-    """
-    Returns corresponding math symbol for Direction of change
-    Usage:
-    {{ indicator.target_frequency|target_frequency_label}}
-    """
-    try:
-        value = value - 1
-        return Indicator.TARGET_FREQUENCIES[value][1]
-    except Exception:
-        return value
-
-
-@register.filter('symbolize_measuretype')
-def symbolize_measuretype(value):
-    """
-    Returns corresponding math symbol for Direction of change
-    Usage:
-    {{ indicator.direction_of_change|symbolize_measuretype}}
-    """
-    if value == Indicator.NUMBER:
-        return _("#")
-
-    if value == Indicator.PERCENTAGE:
-        return _("%")
-
-    return ""
-
-
 @register.filter('hash')
 def hash(obj, attr):
     """
@@ -168,21 +120,6 @@ def make_percent(numerator, denominator):
     if numerator == denominator:
         return 100
     return max(1, min(99, int(round(float(numerator*100)/denominator))))
-
-
-@register.inclusion_tag('indicators/tags/target-percent-met.html', takes_context=True)
-def target_percent_met(context, percent_met, has_ended):
-    margin = Indicator.ONSCOPE_MARGIN
-    on_track = None
-    if percent_met:
-        percent_met = percent_met * 100
-        on_track = (1 - margin) * 100 <= percent_met <= (1 + margin) * 100
-    return {
-        'on_track': on_track,
-        'percent_met': percent_met,
-        'has_ended': has_ended
-    }
-
 
 @register.inclusion_tag('indicators/tags/gauge-tank.html', takes_context=True)
 def gauge_tank(context, metric, has_filters=True):
@@ -253,7 +190,7 @@ def gauge_tank(context, metric, has_filters=True):
     filter_title_count = program.metrics['needs_evidence'] if metric == 'results_evidence' else unfilled_value
     #filled_percent = make_percent(filled_value, denominator)
     filled_percent = 0 if denominator == 0 else (100 - make_percent(unfilled_value, denominator))
-    
+
     filter_active = filled_percent != 100 and (
         metric == 'targets_defined' or (
             metric == 'reported_results' and program.metrics.get('targets_defined', False)
@@ -339,38 +276,6 @@ def gauge_tank_small(context, metric):
         'ticks': list(range(1, tick_count+1)),
     }
 
-
-
-@register.inclusion_tag('indicators/tags/gauge-band.html', takes_context=True)
-def gauge_band(context, has_filters=True):
-    program = context['program']
-    scope_counts = program.scope_counts
-    denominator = scope_counts['indicator_count']
-    results_count = program.metrics['results_count']
-    # program url is only used on the home page (which is served up with has_filters = false
-    #  because it does not filter in React on the home page, it links to the program page with filter in place)
-    program_url = False if has_filters else program.program_page_url
-    program_started = localdate() >= program.reporting_period_start
-
-    scope_percents = {
-        'high': make_percent(scope_counts['high'], denominator),
-        'on_scope': make_percent(scope_counts['on_scope'], denominator),
-        'low': make_percent(scope_counts['low'], denominator),
-        'nonreporting': make_percent(scope_counts['nonreporting_count'], denominator),
-        'reporting': scope_counts['reporting_count']
-    }
-    return {
-        'scope_percents': scope_percents,
-        'scope_counts': scope_counts,
-        'ticks': list(range(1, 11)),
-        'margin': int(Indicator.ONSCOPE_MARGIN * 100),
-        'has_filters': has_filters,
-        'program_url': program_url,
-        'results_count': results_count,
-        'program_started': program_started,
-    }
-
-
 @register.inclusion_tag('indicators/tags/program-complete.html', takes_context=True)
 def program_complete(context, read_only=False):
     """
@@ -385,5 +290,22 @@ def program_complete(context, read_only=False):
         'program.reporting_period_start': program.reporting_period_start,
         'program.reporting_period_end': program.reporting_period_end,
         'program.percent_complete': program.percent_complete,
+        'read_only': 'true' if read_only else 'false',
+    }
+
+@register.inclusion_tag('indicators/tags/program-complete.html', takes_context=True)
+def program_complete_program_page(context, read_only=False):
+    """
+    Renders percentage complete with a graphic icon.
+    Takes percent_complete as an integer percentage value
+    """
+    program = context['program']
+    return {
+        'program.id': program['pk'],
+        'program.start_date': program['start_date'],
+        'program.end_date': program['end_date'],
+        'program.reporting_period_start': program['reporting_period_start_iso'],
+        'program.reporting_period_end': program['reporting_period_end_iso'],
+        'program.percent_complete': program['percent_complete'],
         'read_only': 'true' if read_only else 'false',
     }

@@ -14,12 +14,6 @@ from workflow.models import (
     Organization
 )
 
-from indicators.models import (
-    Result,
-    Indicator,
-    PeriodicTarget
-)
-
 
 def user_has_basic_or_super_admin(user):
     return (
@@ -31,51 +25,6 @@ def user_has_basic_or_super_admin(user):
             ).count() > 0
         )
     )
-
-#wrap a decorator to unify interface between various read/write operations,
-#some of which only have a pk and some of which use a program and indicator id
-def result_pk_adapter(inner):
-    def outer(func):
-        wrapped = inner(func)
-        def wrapper(request, *args, **kwargs):
-            result = get_object_or_404(Result, pk=kwargs.get('pk'))
-            indicator_id = result.indicator_id
-            program_id = result.program_id
-            kwargs['program'] = program_id
-            kwargs['indicator'] = indicator_id
-            return wrapped(request, *args, **kwargs)
-        return wrapper
-    return outer
-
-def indicator_pk_adapter(inner):
-    def outer(func):
-        wrapped = inner(func)
-        def wrapper(request, *args, **kwargs):
-            indicator = get_object_or_404(Indicator, pk=kwargs.get('pk'))
-            kwargs['program'] = indicator.program_id
-            return wrapped(request, *args, **kwargs)
-        return wrapper
-    return outer
-
-def periodic_target_pk_adapter(inner):
-    def outer(func):
-        wrapped = inner(func)
-        def wrapper(request, *args, **kwargs):
-            pt = get_object_or_404(PeriodicTarget, pk=kwargs.get('pk'))
-            kwargs['program'] = pt.indicator.program_id
-            return wrapped(request, *args, **kwargs)
-        return wrapper
-    return outer
-
-def indicator_adapter(inner):
-    def outer(func):
-        wrapped = inner(func)
-        def wrapper(request, *args, **kwargs):
-            indicator = get_object_or_404(Indicator, pk=kwargs['indicator'])
-            kwargs['program'] = indicator.program_id
-            return wrapped(request, *args, **kwargs)
-        return wrapper
-    return outer
 
 def user_has_program_access(user, program):
     return user.is_authenticated() and (
@@ -118,7 +67,6 @@ def has_site_delete_access(func):
         high_role_programs = request.user.tola_user.programaccess_set.filter(role='high', country=site.country)
         request.has_write_access = Program.objects.filter(
             Q(agreement__in=site.projectagreement_set.all())
-            | Q(i_program__in=site.result_set.all())
             | Q(country=site.country),
             id__in=high_role_programs.values('program_id')
         ).exists() or request.user.is_superuser
@@ -143,7 +91,6 @@ def has_site_write_access(func):
             high_role_programs = request.user.tola_user.programaccess_set.filter(role='high', country=site.country)
             request.has_write_access = Program.objects.filter(
                 Q(agreement__in=site.projectagreement_set.all())
-                | Q(i_program__in=site.result_set.all())
                 | Q(country=site.country),
                 id__in=high_role_programs.values('program_id')
             ).exists() or request.user.is_superuser
