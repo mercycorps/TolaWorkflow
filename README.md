@@ -1,3 +1,11 @@
+# This project is no longer actively developed or maintained
+
+- This project may be removed from public view at any time.
+- There is no warranty, express or implied.
+- Use at your own risk.
+
+---
+
 # Tola Activity
 
 **The build status of the dev branch is: [![Build Status](https://travis-ci.org/mercycorps/TolaActivity.svg?branch=dev)](https://travis-ci.org/mercycorps/TolaActivity)**
